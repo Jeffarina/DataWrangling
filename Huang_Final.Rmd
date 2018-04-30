@@ -1,0 +1,257 @@
+---
+title: "Huang_FinalProject"
+author: "Jeffrey Huang"
+date: "4/29/2018"
+output: html_document
+---
+
+```{r, echo = FALSE}
+knitr::opts_knit$set(root.dir = "C:/Users/hjeff/Downloads")
+Sys.setenv(JAVA_HOME='C:\\Program Files\\Java\\jre-9.0.4') # for 64-bit version
+#Set up Directory
+```
+
+
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+#Library used
+library(tidyverse)
+library(VIM)
+library(forcats)
+library(stringr)
+library(rJava)
+library(openNLPdata)
+library(qdap)
+
+```
+
+```{r, echo = FALSE, warning=FALSE}
+
+train <- read_csv("train.csv")
+test <- read_csv("test.csv")
+class(train)
+```
+
+
+Let's take a quick look at our dataset by using the glimpse function, which shows us the number of observations and variables. 
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+glimpse(train)
+glimpse(test)
+```
+
+
+As shown above, we need to find out what the Survived is in our dataset "train"
+
+And next thing is checking the column in our dataset
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+setdiff(names(train), names(test)) 
+```
+
+Let's check out the variables description first.
+ 
+Variable Name | Description
+--------------|-------------
+PassengerID   | Passenger ID (just a row number, so obviously not useful for prediction) 
+Survived      | Survived (1) or died (0)
+Pclass        | Passenger class (first, second or third)
+Name          | Passenger name
+Sex           | Passenger sex
+Age           | Passenger age
+SibSp         | Number of siblings/spouses aboard
+Parch         | Number of parents/children aboard
+Ticket        | Ticket number
+Fare          | Fare
+Cabin         | Cabin
+
+
+Based on all the information we could collect from the dataset, here comes the main concern and purpose of this project, who seems to be more likely to survive in this disaster?
+
+
+
+First thing first, let put all up what we have together to see if we could find out what our next step is. 
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+titanic <- full_join(train, test)
+glimpse(titanic)
+```
+
+From what we got above, we know that the Survived variable is represented by binary entries, 0 and 1.
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+
+titanic <- titanic %>%
+                mutate(Survived = factor(Survived)) %>%
+                mutate(Survived = fct_recode(Survived, "No" = "0", "Yes" = "1"))
+
+svv <- sum(train$Survived)/nrow(train)
+```
+
+At this point, we all know that the dependent variable is the Survived variable, then what are our predictors? By looking at the summary of tables above, we first divide our customers into two groups with no bias -- which is based on gender. 
+
+By utilizing piping, we here is the bar plot we have regarding survival rate and gender. 
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+titanic <- titanic %>%
+        mutate(Sex = factor(Sex)) %>%
+        mutate(Sex = fct_recode(Sex, "Female" = "female", "Male" = "male"))
+
+ggplot(titanic[1:891,], aes(Sex, fill=Survived)) +
+           geom_bar(position = "fill") +
+           ylab("Survival %") +
+           geom_hline(yintercept = (svv), col = "Black", lty = 2) +
+           ggtitle("By gender")
+
+```
+
+As we can see, men are less likely to escape from this disaster. 
+
+Let's also take a look at Names. However, since this variables have lots of invalid symbols and etc, we would need to clean up the mess to see through the messness to see if we could find some clues based on Names
+
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+titanic <- mutate(titanic, Title = str_sub(Name, str_locate(Name, ",")[ , 1] + 2, str_locate(Name, "\\.")[ , 1] - 1))
+
+titanic %>% group_by(Title) %>%
+              summarise(count = n()) %>%
+              arrange(desc(count))
+```
+
+By using groupby and other functions, we are able to see that titles actually have some sort of correlatioin with the Survival rate. 
+
+Let's move further with this result and see if we could find mothers travelling with their children. 
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+titanic <- titanic %>%
+          mutate(Mother = factor(ifelse(c(titanic$Title == "Mrs" | titanic$Title == "Mme" | titanic$Title == "the Countess" | titanic$Title == "Dona" | titanic$Title == "Lady") & titanic$Parch > 0, "Yes", "No"))) 
+
+ggplot(titanic[1:891,], aes(x = Mother, fill = Survived)) +
+          geom_bar(position = "fill") +
+          ylab("Survival %") +
+          geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "black", lty = 2) +
+          ggtitle("by Motherhood Status")
+```
+
+We can see that mothers are more likely to survive than the other passengers.
+
+Let's see what we could find by using family name. 
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+
+titanic <- titanic %>%
+              mutate(Surname = factor(beg2char(Name, ","))) %>% 
+              glimpse()
+```
+
+Since this is a huge dateset, we will first rule out those travelled alone or with friends. 
+
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+titanic <- mutate(titanic, Solo = factor(ifelse(SibSp + Parch + 1 == 1, "Yes", "No")))
+
+ggplot(titanic[1:891,], aes(x = Solo, fill=Survived)) +
+          geom_bar(position = "fill") +
+          ylab("Survival %") +
+          geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "black", lty = 2) +
+          ggtitle("by Solo Passenger Status")
+```
+
+And surprisingly they have worse survival rate.
+
+Let's go even further, what about those with large family group? What'd happen if their family group was larger? What'd happen if they have one more family member tagging along? Let's say, for those who travelled with 4 or more people are in a large family group, and a medium family as one that has more than 1 but fewer than 5 and single people as 1.
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+titanic <- titanic %>% 
+              mutate(FamilySize = SibSp + Parch + 1) %>% 
+              mutate(FamilyType = factor(ifelse(FamilySize > 4, "Large", ifelse(FamilySize == 1, "Single", "Medium"))))
+
+ggplot(titanic[1:891,], aes(x = FamilyType, fill = Survived)) +
+          geom_bar(position = "fill") +
+          ylab("Survival %") +
+          geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "black", lty = 2) + 
+          ggtitle ("by Family Group Size")
+
+```
+
+As we can see, for those in larger families, they are doing even worse! They have the least survival rate among all group! This is hardly surprising since as we all could imagine how difficult it would be when you'd need to ensure safety among all your family members in those extremely chaos and dangerous situation. 
+
+And moving forward, we would look at the variables that are missing values. 
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+
+titanic %>% map_dbl(~sum(is.na(.)))
+
+aggr(titanic, prop = FALSE, combined = TRUE, numbers = TRUE, sortVars = TRUE, sortCombs = TRUE)
+```
+
+
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+filter(titanic, is.na(Embarked)) 
+
+filter(titanic, is.na(Fare)) 
+
+titanic %>% group_by(Pclass, Embarked) %>%
+                summarise(count = n(), median_fare = median(Fare, na.rm=TRUE))
+
+titanic <- titanic %>%
+              mutate(Embarked = factor(ifelse(is.na(Embarked), names(which.max(table(titanic$Embarked))), Embarked))) %>%
+              group_by(Pclass, Embarked) %>%
+              mutate(Fare = ifelse(is.na(Fare), round(median(Fare, na.rm = TRUE), 4), Fare))
+```
+
+Since we are dealing with missing values in embarkation ports, passenger classes and fares, how about some ggplots related to the Survival rate
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+ggplot(titanic[1:891,], aes(x = Embarked, fill = Survived)) +
+      geom_bar(position = "fill") +
+      ylab("Survival %") +
+      geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "black", lty = 2) +
+      ggtitle("Survival Rates by Embarkation Port")
+
+ggplot(titanic[1:891,], aes(x = Pclass, fill = Survived)) +
+      geom_bar(position = "fill") +
+      ylab("Survival %") +
+      geom_hline(yintercept = (sum(train$Survived)/nrow(train)), col = "black", lty = 2) +
+      ggtitle("by Passenger Class")
+```
+
+Not surprising that the first class has the highest survival rate. 
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+ggplot(titanic[1:891,], aes(x = log(Fare), fill = Survived)) +
+      geom_density(alpha = 0.4)  + 
+      ggtitle("Density Plot of Fare related to Survival") 
+
+```
+
+Because of the heavy skew, we'd take a log data transformation. 
+
+For missing Age variable, we would put in the median value based on the Title group. 
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+titanic %>% group_by(Title) %>%
+             summarise(median = median(Age, na.rm = TRUE))
+ 
+titanic <- titanic %>%
+              group_by(Title) %>%
+              mutate(Age = ifelse(is.na(Age), round(median(Age, na.rm = TRUE), 1), Age)) 
+
+
+ggplot(titanic[1:891,], aes(x = Age, fill = Survived)) +
+      geom_density(alpha = 0.4)  + 
+      ggtitle("Density Plot of Age related to Survival") 
+
+```
+
+From the plot shown above, we could say that 20 to 35 years old have the wrost survival rate. 
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+titanic <- mutate(titanic, LifeStage = factor(ifelse(Age < 18, "Child", ifelse(Age <= 60, "Adult", "OAP"))))
+
+titanic <- select(titanic, -c(Name, Ticket, Cabin, Surname)) %>%
+              glimpse()
+```
+
+We then have completed our data cleaning mission and have more clear understanding on the Titanic. Thank you for your time! 
